@@ -43,19 +43,43 @@ public class InvertedIndex {
 
     private final Map<String, List<Posting>> index = new HashMap<>();
     private final Set<String> docIds = new HashSet<>();
+    /** docId → the terms that document currently contributes (for re-indexing). */
+    private final Map<String, Set<String>> termsByDoc = new HashMap<>();
 
-    /** Adds one document's tokens to the index. Idempotent w.r.t. docId. */
+    /**
+     * Adds one document's tokens to the index. Re-adding an existing docId
+     * <em>replaces</em> its postings, so the crawler can refresh a listing
+     * every cycle without inflating term frequencies or duplicating results.
+     */
     public void addDocument(String docId, String text) {
         if (docId == null || docId.isEmpty() || text == null) return;
+        removeDocument(docId);
         docIds.add(docId);
 
         // Per-doc term frequency, then push one Posting per unique term.
         WordFrequencyCounter c = new WordFrequencyCounter();
         c.countText(text);
-        for (Map.Entry<String, Integer> e : c.snapshot().entrySet()) {
+        Map<String, Integer> counts = c.snapshot();
+        for (Map.Entry<String, Integer> e : counts.entrySet()) {
             index.computeIfAbsent(e.getKey(), k -> new ArrayList<>())
                  .add(new Posting(docId, e.getValue()));
         }
+        termsByDoc.put(docId, new HashSet<>(counts.keySet()));
+    }
+
+    /** Removes every posting belonging to {@code docId}. No-op if unknown. */
+    public void removeDocument(String docId) {
+        if (docId == null) return;
+        Set<String> terms = termsByDoc.remove(docId);
+        if (terms != null) {
+            for (String t : terms) {
+                List<Posting> list = index.get(t);
+                if (list == null) continue;
+                list.removeIf(p -> p.docId.equals(docId));
+                if (list.isEmpty()) index.remove(t);
+            }
+        }
+        docIds.remove(docId);
     }
 
     /** Postings for one term, or empty list. */

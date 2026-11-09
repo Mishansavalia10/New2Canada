@@ -27,7 +27,9 @@ public final class EditDistance {
 
     /** Returns just the distance; ignores the full table. */
     public static int distance(String a, String b) {
-        return buildTable(a, b)[a.length()][b.length()];
+        String x = a == null ? "" : a;
+        String y = b == null ? "" : b;
+        return buildTable(x, y)[x.length()][y.length()];
     }
 
     /** Returns the full DP table — useful for explaining the algorithm. */
