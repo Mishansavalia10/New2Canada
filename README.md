@@ -136,3 +136,64 @@ Auth is via `Authorization: Bearer <Firebase-ID-token>`. In DEMO mode the middle
 > - `docs/screens/06-history-firestore.png`
 
 ---
+
+---
+
+## Testing
+
+```bash
+./run.sh test        # macOS / Linux   (Windows: run.bat test)
+mvn test             # any platform
+```
+
+The suite (JUnit 5) covers the data-structure code (inverted index, trie, autocomplete,
+edit distance, spell checker, merge sort), the regex validators and price parser, the
+robots.txt rules and fetcher, and the crawl cooldown gate. Tests that need the internet
+use a local HTTP server instead.
+
+## Running
+
+| Platform | Command |
+|---|---|
+| macOS / Linux | `./run.sh` |
+| Windows | `run.bat` |
+
+Both scripts check for JDK 17+ and Maven and print a clear message if either is missing.
+Set `JAVA_HOME` if you have several JDKs installed.
+
+### Configuration (environment variables, all optional)
+
+| Variable | Effect |
+|---|---|
+| `NEW2CANADA_CONTACT` | Contact (email or URL) placed in the crawler's User-Agent so site owners can reach us. Set this before live crawling. |
+| `NEW2CANADA_CRAWL=off` | Turns off live scraping and uses cached data only. Useful for demos and development. |
+
+## Security and privacy changes
+
+- **Input limits:** search text, filters, spell-check words and validation values are capped in length. Form bodies are capped at 4 KB.
+- **No internal details in errors:** server errors return a generic message; the exception is logged on the server only.
+- **No wildcard CORS:** the API is same-origin, so cross-origin browser access is no longer allowed. Responses set `nosniff` and `no-store`.
+- **Static files:** any path containing `..` is refused, instead of rewriting it.
+- **DEMO mode history:** the shared visitor history is no longer returned, so one visitor cannot see another's searches.
+- **Crawl abuse:** manual refreshes are limited to one run at a time with a 10-minute cooldown (`429` / `409` responses).
+- **Firestore rules:** `firestore.rules` denies all direct client access. The server uses the Admin SDK, which is not affected by these rules.
+- **Scraping politeness:** every page is checked against the site's `robots.txt` first. A site whose robots.txt returns a server error is skipped for an hour.
+
+## Terms and privacy
+
+`/terms.html` and `/privacy.html` are **drafts**. They describe what the code actually does, but they are not legal advice and have not been reviewed. Items in square brackets (contact, retention period, governing law) must be decided before publishing.
+
+## Design and assets
+
+Fonts and icons are self-hosted in `static/fonts/`, and the stylesheet is prebuilt in `static/css/tailwind.css`, so the pages no longer depend on a CDN.
+To rebuild the stylesheet after changing colours or classes:
+
+```bash
+cd ui-build && npm install && npm run build
+```
+
+## Known limits
+
+- Live scraping depends on each rental site's HTML. A site redesign breaks its extractor. There are no fixture tests for the extractors yet, so a breakage shows up only when a crawl runs.
+- Search history cannot yet be deleted by the user. It is a planned feature.
+- Results are held in memory and rebuilt from the Firestore cache at startup.
