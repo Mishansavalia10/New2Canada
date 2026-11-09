@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 public class CrawlScheduler {
 
     private final SearchEngine engine;
+    private final CrawlGate gate = new CrawlGate(AppConfig.MANUAL_CRAWL_COOLDOWN_MS);
 
     private final ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "crawl-scheduler");
@@ -30,21 +31,44 @@ public class CrawlScheduler {
         this.engine = engine;
     }
 
-    /** Kicks off the very first crawl immediately + recurring crawls thereafter. */
+    /**
+     * Kicks off the very first crawl immediately + recurring crawls thereafter.
+     * Does nothing when live crawling is disabled (see {@link AppConfig#CRAWL_ENABLED}).
+     */
     public void start() {
-        exec.scheduleAtFixedRate(this::runOnce, 0, AppConfig.CRAWL_INTERVAL_MIN, TimeUnit.MINUTES);
+        if (!AppConfig.CRAWL_ENABLED) {
+            System.out.println("[crawler] live crawling disabled (NEW2CANADA_CRAWL=off); using cached data.");
+            return;
+        }
+        exec.scheduleAtFixedRate(this::scheduledRun, 0, AppConfig.CRAWL_INTERVAL_MIN, TimeUnit.MINUTES);
     }
 
-    /** Triggers a one-off crawl right now (used by /api/refresh-crawl). */
-    public void triggerNow() {
-        exec.submit(this::runOnce);
+    /** Requests a crawl from a user; refused while one runs or during cooldown. */
+    public CrawlGate.Decision triggerNow() {
+        if (!AppConfig.CRAWL_ENABLED) return CrawlGate.Decision.DISABLED;
+        CrawlGate.Decision d = gate.tryStartManual();
+        if (d == CrawlGate.Decision.STARTED) exec.submit(this::runOnce);
+        return d;
     }
 
     public void shutdown() {
         exec.shutdownNow();
     }
 
+    private void scheduledRun() {
+        if (gate.tryStartScheduled() == CrawlGate.Decision.STARTED) runOnce();
+    }
+
+    /** Runs a crawl; the caller must already hold the gate (see tryStart*). */
     private void runOnce() {
+        try {
+            crawl();
+        } finally {
+            gate.finish();
+        }
+    }
+
+    private void crawl() {
         System.out.println("[crawler] starting refresh…");
         long started = System.currentTimeMillis();
 

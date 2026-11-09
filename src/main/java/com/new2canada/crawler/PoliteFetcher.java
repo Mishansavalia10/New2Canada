@@ -30,6 +30,7 @@ import java.util.Map;
  *
  * <ul>
  *   <li>A descriptive User-Agent identifying the project and course.</li>
+ *   <li>robots.txt is checked before every page; disallowed pages are skipped.</li>
  *   <li>A {@link AppConfig#FETCH_DELAY_MS} delay between hits to the
  *       <i>same host</i>, so a burst of crawler activity never floods a
  *       single site.</li>
@@ -47,6 +48,9 @@ public class PoliteFetcher implements AutoCloseable {
     private final Map<String, Long> lastFetchPerHost = new HashMap<>();
 
     private WebDriver driver;
+
+    /** Honours each site's robots.txt before we open a page on it. */
+    private final RobotsCache robots = new RobotsCache(AppConfig.USER_AGENT);
 
     public PoliteFetcher() {
         WebDriverManager.chromedriver().setup();
@@ -94,6 +98,10 @@ public class PoliteFetcher implements AutoCloseable {
      */
     public synchronized Document fetch(String url, String readyCss) {
         if (url == null || url.isBlank()) return null;
+        if (!robots.isAllowed(url)) {
+            System.err.println("PoliteFetcher: robots.txt does not allow " + url + " — skipped");
+            return null;
+        }
         try {
             throttleSameHost(url);
             driver.get(url);
