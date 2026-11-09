@@ -28,26 +28,36 @@ let firebaseAuth = null;
 // otherwise they'll hit the API a few hundred ms before currentUser is
 // populated and get a 401 from the backend.
 let authReady = null;
+// Set when the Firebase SDK cannot load (offline, blocked CDN). We then stop
+// retrying on every API call and let the app run anonymously.
+let authUnavailable = false;
 
 async function ensureFirebase() {
     if (firebaseApp) return firebaseAuth;
+    if (authUnavailable) return null;
     if (firebaseConfig.apiKey === "YOUR_API_KEY") return null; // not configured yet
 
-    const appMod  = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
-    const authMod = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+    try {
+        const appMod  = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+        const authMod = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
 
-    firebaseApp  = appMod.initializeApp(firebaseConfig);
-    firebaseAuth = authMod.getAuth(firebaseApp);
+        firebaseApp  = appMod.initializeApp(firebaseConfig);
+        firebaseAuth = authMod.getAuth(firebaseApp);
 
-    let resolveReady;
-    authReady = new Promise(r => { resolveReady = r; });
-    let resolved = false;
-    authMod.onAuthStateChanged(firebaseAuth, (user) => {
-        renderAuthUI(user, authMod);
-        if (!resolved) { resolved = true; resolveReady(); }
-    });
-    window.__firebaseAuthModule__ = authMod; // for sign-in button
-    return firebaseAuth;
+        let resolveReady;
+        authReady = new Promise(r => { resolveReady = r; });
+        let resolved = false;
+        authMod.onAuthStateChanged(firebaseAuth, (user) => {
+            renderAuthUI(user, authMod);
+            if (!resolved) { resolved = true; resolveReady(); }
+        });
+        window.__firebaseAuthModule__ = authMod; // for sign-in button
+        return firebaseAuth;
+    } catch (err) {
+        console.warn('Sign-in is unavailable:', err);
+        authUnavailable = true;
+        return null;
+    }
 }
 
 function renderAuthUI(user, authMod) {
@@ -82,7 +92,7 @@ window.getIdToken = async function () {
 // Used by login.html's "Sign in with Google" button.
 window.signInWithGoogle = async function () {
     const auth = await ensureFirebase();
-    if (!auth) throw new Error('Sign-in is disabled in DEMO mode — configure Firebase in js/auth.js');
+    if (!auth) throw new Error('Sign-in is not available right now. You can still search without an account.');
     const authMod = window.__firebaseAuthModule__;
     const provider = new authMod.GoogleAuthProvider();
     await authMod.signInWithPopup(auth, provider);
@@ -94,6 +104,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!auth) {
         const box = document.getElementById('authBox');
         if (box) box.innerHTML =
-            `<span class="font-label-sm text-label-sm text-on-surface-variant" title="DEMO mode">Sign-in disabled (DEMO mode)</span>`;
+            `<span class="font-label-sm text-label-sm text-on-surface-variant" title="Sign-in is not available on this server">Sign-in unavailable</span>`;
     }
 });

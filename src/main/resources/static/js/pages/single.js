@@ -66,7 +66,12 @@ async function loadFacets() {
         fillSelect(provSel, provinces, 'Any province', '');
         fillSelect(citySel, [], 'Select a province first', '');
         citySel.disabled = true;
-    } catch (e) { /* no facets yet */ }
+    } catch (e) {
+        // Facets are optional: keep the province list usable from the static data.
+        fillSelect(provSel, ALL_PROVINCES, 'Any province', '');
+        fillSelect(citySel, [], 'Select a province first', '');
+        citySel.disabled = true;
+    }
 }
 
 function fillSelect(sel, values, anyLabel, preselect) {
@@ -138,7 +143,7 @@ async function runApartmentSearch(query) {
         loadHistory();   // the server just recorded this query — reflect it now
         loadStats();     // bump "Searches served" without a page reload
     } catch (e) {
-        aptResults.innerHTML = `<div class="empty-card md:col-span-2 lg:col-span-3">Error: ${escapeHtml(e.message)}</div>`;
+        renderErrorState(aptResults, e.message, () => runApartmentSearch(query));
         aptPager.innerHTML = '';
     }
 }
@@ -160,7 +165,7 @@ async function runTopPicks() {
         }
         showResults(data.top);
     } catch (e) {
-        aptResults.innerHTML = `<div class="empty-card md:col-span-2 lg:col-span-3">Error: ${escapeHtml(e.message)}</div>`;
+        renderErrorState(aptResults, e.message, runTopPicks);
         aptPager.innerHTML = '';
     }
 }
@@ -257,7 +262,7 @@ async function runAutocomplete(term) {
             document.getElementById('apartments').scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
     } catch (e) {
-        acResults.innerHTML = `<li class="text-error text-body-sm">Error: ${escapeHtml(e.message)}</li>`;
+        acResults.innerHTML = `<li class="text-error text-body-sm">${escapeHtml(e.message)}</li>`;
     }
 }
 
@@ -283,7 +288,11 @@ async function runSpellcheck(word) {
         }
         const list = s.map(x => `<li><a href="#" class="spell-pick" data-w="${escapeHtml(x)}">${escapeHtml(x)}</a></li>`).join('');
         spellOut.innerHTML = `<div class="did-you-mean">Did you mean <b>${escapeHtml(data.corrected)}</b>?</div>
-            <div class="card"><h3>Top suggestions</h3><p class="muted">By edit distance, then corpus frequency.</p><ol>${list}</ol></div>`;
+            <div class="rounded-2xl bg-surface-container-low p-4 mt-3">
+                <h3 class="font-label-md text-label-md text-on-surface mb-1">Top suggestions</h3>
+                <p class="text-body-sm text-on-surface-variant mb-2">Closest spellings first, then the most common.</p>
+                <ol class="list-decimal pl-5 space-y-1 text-body-md">${list}</ol>
+            </div>`;
         [...spellOut.querySelectorAll('.spell-pick')].forEach(a => a.onclick = (ev) => {
             ev.preventDefault();
             const w = a.dataset.w;
@@ -291,7 +300,7 @@ async function runSpellcheck(word) {
             document.getElementById('apartments').scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
     } catch (e) {
-        spellOut.innerHTML = `<div class="validate-out invalid">Error: ${escapeHtml(e.message)}</div>`;
+        spellOut.innerHTML = `<div class="validate-out invalid">${escapeHtml(e.message)}</div>`;
     }
 }
 
@@ -309,7 +318,7 @@ async function runValidate(type, value) {
         const data = await api.post('/api/validate', { type, value });
         valOut.innerHTML = `<div class="validate-out ${data.valid ? 'valid' : 'invalid'}">${data.valid ? '✅' : '❌'} <span><b>${escapeHtml(data.value)}</b> — ${escapeHtml(data.message)}</span></div>`;
     } catch (e) {
-        valOut.innerHTML = `<div class="validate-out invalid">Error: ${escapeHtml(e.message)}</div>`;
+        valOut.innerHTML = `<div class="validate-out invalid">${escapeHtml(e.message)}</div>`;
     }
 }
 
@@ -374,6 +383,12 @@ attachAutocompleteDropdown(masterQ, masterAc, (word) => { masterQ.value = word; 
  * ====================================================================== */
 function attachAutocompleteDropdown(input, dropdown, onPick) {
     let timer;
+    // Submitting the search or pressing Escape should close the suggestions,
+    // otherwise they stay on top of the results they were meant to help with.
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' || e.key === 'Enter') dropdown.style.display = 'none';
+    });
+    if (input.form) input.form.addEventListener('submit', () => { dropdown.style.display = 'none'; });
     input.addEventListener('input', () => {
         clearTimeout(timer);
         timer = setTimeout(async () => {
@@ -448,7 +463,7 @@ async function loadHistory() {
             </div>`;
     } catch (e) {
         // FULL mode returns 401 ("Unauthorized") until the user signs in.
-        historyOut.innerHTML = /unauth|401/i.test(e.message)
+        historyOut.innerHTML = e.status === 401
             ? `<p class="text-on-surface-variant text-body-sm">Sign in with Google (top right) to see your search history.</p>`
             : `<p class="text-on-surface-variant text-body-sm">Couldn't load history right now.</p>`;
     }

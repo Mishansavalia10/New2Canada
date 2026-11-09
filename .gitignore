@@ -16,3 +16,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# UI build tooling (npm)
+ui-build/node_modules/

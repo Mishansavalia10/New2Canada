@@ -1,27 +1,61 @@
 // Shared helpers used by every page.
 
+// Thrown by api.get/post. `status` is the HTTP status (0 when the network failed).
+class ApiError extends Error {
+    constructor(message, status) {
+        super(message);
+        this.name = 'ApiError';
+        this.status = status;
+    }
+}
+
+const FRIENDLY_STATUS = {
+    400: 'That input is too long. Shorten it and try again.',
+    401: 'Please sign in to use this feature.',
+    404: 'That service could not be found.',
+    409: 'Something is already running. Please try again shortly.',
+    429: 'Too many requests. Please wait a moment and try again.',
+};
+
+async function request(path, options) {
+    let r;
+    try {
+        r = await fetch(path, options);
+    } catch (_) {
+        throw new ApiError("Can't reach the server. Check that it is running, then try again.", 0);
+    }
+    if (!r.ok) {
+        let serverMsg = '';
+        try { serverMsg = (await r.json()).error || ''; } catch (_) { /* not JSON */ }
+        const fallback = r.status >= 500
+            ? 'The server ran into a problem. Please try again.'
+            : 'The request failed. Please try again.';
+        throw new ApiError(serverMsg || FRIENDLY_STATUS[r.status] || fallback, r.status);
+    }
+    return r.json();
+}
+
 window.api = {
     async get(path) {
-        const headers = await authHeaders();
-        const r = await fetch(path, { headers });
-        if (!r.ok) throw new Error(r.statusText);
-        return await r.json();
+        return request(path, { headers: await authHeaders() });
     },
     async post(path, formData) {
         const headers = await authHeaders();
         headers['Content-Type'] = 'application/x-www-form-urlencoded';
         const body = new URLSearchParams(formData).toString();
-        const r = await fetch(path, { method: 'POST', headers, body });
-        if (!r.ok) throw new Error(r.statusText);
-        return await r.json();
+        return request(path, { method: 'POST', headers, body });
     }
 };
 
 async function authHeaders() {
     const headers = {};
-    if (window.getIdToken) {
-        const token = await window.getIdToken();
-        if (token) headers['Authorization'] = 'Bearer ' + token;
+    try {
+        if (window.getIdToken) {
+            const token = await window.getIdToken();
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+        }
+    } catch (_) {
+        // Sign-in is optional for search: fall back to anonymous requests.
     }
     return headers;
 }
@@ -131,7 +165,20 @@ function qsParam(name) {
     return new URLSearchParams(window.location.search).get(name) || '';
 }
 
+// Replaces a results area with a readable message and a retry button.
+function renderErrorState(el, message, onRetry) {
+    el.innerHTML = `
+        <div class="empty-card md:col-span-2 lg:col-span-3" role="alert">
+            <h3>Something didn't load</h3>
+            <p>${escape(message)}</p>
+            <button type="button" class="retry-btn mt-4 px-5 py-2 rounded-full bg-primary text-white font-label-md text-label-md">Try again</button>
+        </div>`;
+    const btn = el.querySelector('.retry-btn');
+    if (btn && onRetry) btn.addEventListener('click', onRetry);
+}
+
 window.renderResult = renderResult;
+window.renderErrorState = renderErrorState;
 window.skeletonList = skeletonList;
 window.qsParam      = qsParam;
 window.escapeHtml   = escape;
