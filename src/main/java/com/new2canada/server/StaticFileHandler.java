@@ -19,7 +19,7 @@ import java.nio.charset.StandardCharsets;
  *   <li>{@code GET /css/x.css}    → {@code static/css/x.css}</li>
  * </ul>
  *
- * <p>Path traversal is blocked by stripping every {@code "../"} segment
+ * <p>Path traversal is blocked by rejecting any path containing {@code ".."}
  * before we touch the classpath.
  */
 public class StaticFileHandler implements HttpHandler {
@@ -28,13 +28,21 @@ public class StaticFileHandler implements HttpHandler {
     public void handle(HttpExchange ex) throws IOException {
         String path = ex.getRequestURI().getPath();
         if ("/".equals(path)) path = "/index.html";
-        String safe = ("static" + path).replace("../", "");
+        // Reject any traversal attempt outright instead of trying to rewrite it:
+        // "....//" survives a naive replace("../", "") and would still be a
+        // suspicious lookup. Classpath resources are only read under static/.
+        if (path.contains("..") || path.indexOf('\\') >= 0 || path.indexOf('\0') >= 0) {
+            notFound(ex, path);
+            return;
+        }
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
 
-        try (InputStream in = cl.getResourceAsStream(safe)) {
+        try (InputStream in = cl.getResourceAsStream("static" + path)) {
             if (in == null) { notFound(ex, path); return; }
             byte[] body = in.readAllBytes();
             ex.getResponseHeaders().add("Content-Type", contentTypeFor(path));
+            ex.getResponseHeaders().add("X-Content-Type-Options", "nosniff");
+            ex.getResponseHeaders().add("X-Frame-Options", "DENY");
             ex.sendResponseHeaders(200, body.length);
             try (OutputStream os = ex.getResponseBody()) { os.write(body); }
         }

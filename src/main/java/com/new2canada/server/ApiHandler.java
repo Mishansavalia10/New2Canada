@@ -2,6 +2,7 @@ package com.new2canada.server;
 
 import com.new2canada.auth.AuthMiddleware;
 import com.new2canada.auth.User;
+import com.new2canada.crawler.CrawlGate;
 import com.new2canada.crawler.CrawlScheduler;
 import com.new2canada.database.SearchHistoryRepository;
 import com.new2canada.database.UserRepository;
@@ -31,6 +32,10 @@ import java.util.Map;
  * whole API surface is readable in one screen.
  */
 public class ApiHandler implements HttpHandler {
+
+    static final int MAX_QUERY_LEN  = 200;
+    static final int MAX_FILTER_LEN = 80;
+    static final int MAX_BODY_BYTES = 4096;
 
     private final SearchEngine engine;
     private final AuthMiddleware auth;
@@ -68,8 +73,9 @@ public class ApiHandler implements HttpHandler {
                 default                   -> json(ex, 404, Map.of("error", "no such endpoint: " + path));
             }
         } catch (Exception e) {
-            json(ex, 500, Map.of("error", method + " " + path + " failed", "message",
-                    String.valueOf(e.getMessage())));
+            // Log the detail on the server; never send exception text to the browser.
+            System.err.println("ApiHandler: " + method + " " + path + " failed: " + e);
+            json(ex, 500, Map.of("error", "Something went wrong. Please try again."));
         }
     }
 
@@ -80,6 +86,11 @@ public class ApiHandler implements HttpHandler {
         String query    = q.getOrDefault("q", "");
         String city     = q.getOrDefault("city", "");
         String province = q.getOrDefault("province", "");
+        if (!withinLimits(query, MAX_QUERY_LEN) || !withinLimits(city, MAX_FILTER_LEN)
+                || !withinLimits(province, MAX_FILTER_LEN)) {
+            json(ex, 400, Map.of("error", "search input is too long"));
+            return;
+        }
 
         User user = auth.resolve(ex); // may be null in FULL mode if unauth'd — search is still public
         String uid = user != null ? user.uid() : null;
@@ -127,6 +138,10 @@ public class ApiHandler implements HttpHandler {
     private void handleSpellcheck(HttpExchange ex) throws IOException {
         Map<String, String> q = parseQuery(ex.getRequestURI());
         String word = q.getOrDefault("word", "");
+        if (!withinLimits(word, MAX_QUERY_LEN)) {
+            json(ex, 400, Map.of("error", "word is too long"));
+            return;
+        }
         List<String> suggestions = engine.spellSuggest(word, 5);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("word", word);
@@ -143,6 +158,10 @@ public class ApiHandler implements HttpHandler {
                 : parseQuery(ex.getRequestURI());
         String type  = form.getOrDefault("type", "postal");
         String value = form.getOrDefault("value", "");
+        if (!withinLimits(value, MAX_FILTER_LEN)) {
+            json(ex, 400, Map.of("error", "value is too long"));
+            return;
+        }
         boolean ok   = RegexValidator.validate(type, value);
         json(ex, 200, Map.of(
                 "type", type,
@@ -198,14 +217,12 @@ public class ApiHandler implements HttpHandler {
             body.put("frequencies", historyRepo.frequencies(u.uid(), 500));
             recent = historyRepo.recent(u.uid(), 25);
         } else {
-            // DEMO mode: no Firestore, so serve the in-memory tracker.
-            body.put("frequencies", engine.localTracker().frequencies());
+            // DEMO mode has no per-user storage: every visitor is the same
+            // anonymous caller, so the shared tracker would expose other people's
+            // searches. Return nothing personal here.
+            body.put("frequencies", Map.of());
             recent = new ArrayList<>();
-            for (var entry : engine.localTracker().recent()) {
-                recent.add(Map.of(
-                        "q", entry.query, "type", entry.type,
-                        "timestamp", entry.timestamp, "resultsCount", entry.resultsCount));
-            }
+            body.put("note", "Search history is only kept when the server runs in FULL mode.");
         }
         body.put("recent", recent);
         json(ex, 200, body);
@@ -228,8 +245,15 @@ public class ApiHandler implements HttpHandler {
     private void handleRefresh(HttpExchange ex) throws IOException {
         User u = auth.resolve(ex);
         if (u == null) { json(ex, 401, Map.of("error", "sign in to trigger a crawl")); return; }
-        if (scheduler != null) scheduler.triggerNow();
-        json(ex, 202, Map.of("ok", true, "message", "Crawl triggered."));
+        if (scheduler == null) { json(ex, 503, Map.of("error", "crawler unavailable")); return; }
+        switch (scheduler.triggerNow()) {
+            case STARTED -> json(ex, 202, Map.of("ok", true, "message", "Crawl started."));
+            case ALREADY_RUNNING -> json(ex, 409, Map.of("ok", false, "message", "A crawl is already running."));
+            case COOLDOWN -> json(ex, 429, Map.of("ok", false,
+                    "message", "Please wait a few minutes before refreshing again."));
+            case DISABLED -> json(ex, 409, Map.of("ok", false,
+                    "message", "Live crawling is turned off on this server."));
+        }
     }
 
     /* ----------------- /api/debug -------------------------------------- */
@@ -244,7 +268,8 @@ public class ApiHandler implements HttpHandler {
     private static void json(HttpExchange ex, int status, Object body) throws IOException {
         byte[] payload = JsonWriter.write(body).getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
-        ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+        ex.getResponseHeaders().add("X-Content-Type-Options", "nosniff");
+        ex.getResponseHeaders().add("Cache-Control", "no-store");
         ex.sendResponseHeaders(status, payload.length);
         try (OutputStream os = ex.getResponseBody()) { os.write(payload); }
     }
@@ -264,7 +289,9 @@ public class ApiHandler implements HttpHandler {
     }
 
     private static Map<String, String> parseFormBody(HttpExchange ex) throws IOException {
-        String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        byte[] raw = ex.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
+        if (raw.length > MAX_BODY_BYTES) return new HashMap<>();   // oversize: treat as empty
+        String body = new String(raw, StandardCharsets.UTF_8);
         Map<String, String> out = new HashMap<>();
         if (body.isEmpty()) return out;
         for (String pair : body.split("&")) {
@@ -275,6 +302,10 @@ public class ApiHandler implements HttpHandler {
                     URLDecoder.decode(v, StandardCharsets.UTF_8));
         }
         return out;
+    }
+
+    private static boolean withinLimits(String s, int max) {
+        return s == null || s.length() <= max;
     }
 
     private static int parseInt(String s, int fallback) {

@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// Firestore security rules for New2Canada.
+//
+// The Java server talks to Firestore with the Firebase Admin SDK, which uses
+// a service account and bypasses these rules. Browsers never read or write
+// the database directly (they call the /api routes), so every client-side
+// access is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
